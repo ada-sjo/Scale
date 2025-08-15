@@ -11,30 +11,33 @@
 <body>
   <div id="container"></div>
 
-  <!-- Kör allt som ES-moduler -->
-  <script type="module">
-    import Graph from "https://cdn.jsdelivr.net/npm/graphology@0.25.1/+esm";
-    import { parse as parseGEXF } from "https://cdn.jsdelivr.net/npm/graphology-gexf@0.10.0/+esm";
-    import Sigma from "https://cdn.jsdelivr.net/npm/sigma@2.3.0/+esm";
+  <!-- UMD builds (skapar globala variabler) -->
+  <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.1/dist/graphology.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/graphology-gexf@0.10.0/browser/graphology-gexf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sigma@2.3.0/build/sigma.min.js"></script>
 
-    // Byt filnamn här om du använder ett annat namn
-    const GEXF_URL = "network.gexf";
+  <script>
+    // Vänta tills allt är laddat
+    (async () => {
+      // 1) Läs GEXF
+      const res = await fetch("network.gexf");
+      if (!res.ok) throw new Error("Kunde inte läsa network.gexf");
+      const gexfText = await res.text();
 
-    // 1) Hämta GEXF som text
-    const gexfText = await fetch(GEXF_URL).then(r => {
-      if (!r.ok) throw new Error(`Kunde inte läsa ${GEXF_URL}: ${r.status}`);
-      return r.text();
+      // 2) Parsning via globala objekt från UMD
+      //   - Graph-konstruktorn: window.graphology.Graph
+      //   - GEXF-parsern: window.graphologyGexf.parse(GraphCtor, text)
+      const GraphCtor = window.graphology.Graph;
+      const graph = window.graphologyGexf.parse(GraphCtor, gexfText);
+
+      // 3) Rendera med Sigma (global namespace "sigma")
+      const container = document.getElementById("container");
+      const renderer = new sigma.Sigma(graph, container);
+      renderer.getCamera().animatedReset();
+    })().catch(err => {
+      console.error("Fel vid laddning/rendering:", err);
+      alert("Kunde inte visa grafen. Se konsolen för detaljer.");
     });
-
-    // 2) Parsning: graphology-gexf kräver Graph-konstruktorn som första argument
-    const graph = parseGEXF(Graph, gexfText);
-
-    // 3) Rendera med Sigma
-    const container = document.getElementById("container");
-    const renderer = new Sigma(graph, container);
-
-    // (valfritt) centrera/zooma in lite
-    renderer.getCamera().animatedReset();
   </script>
 </body>
 </html>
