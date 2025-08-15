@@ -2,49 +2,61 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
-  <title>Nätverksgraf</title>
+  <title>Nätverksgraf – Gephi Lite → Sigma</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body, #container { margin:0; padding:0; width:100%; height:100vh; }
+    /* (valfritt) liten overlay för instruktion */
+    .hint {
+      position: fixed; inset: 12px auto auto 12px; z-index: 10;
+      background: rgba(255,255,255,0.9); padding: 8px 12px; border-radius: 8px;
+      font: 13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    }
+    .hint kbd {
+      background: #f2f2f2; border-radius: 4px; padding: 0 6px; border: 1px solid #ddd;
+    }
   </style>
 </head>
 <body>
+  <div class="hint">Klicka på en nod för att filtrera kopplingar. Klicka på bakgrunden eller tryck <kbd>Esc</kbd> för att återställa.</div>
   <div id="container"></div>
 
-  <!-- Endast två beroenden via CDN: Graphology + Sigma (UMD-byggnader) -->
+  <!-- Endast två beroenden via CDN (UMD): Graphology + Sigma -->
   <script src="https://cdn.jsdelivr.net/npm/graphology@0.26.0/dist/graphology.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sigma@2.4.0/build/sigma.min.js"></script>
 
   <script>
-    // Minimal GEXF->Graphology parser (utan externa parsers)
+    // ====== Minimal GEXF → Graphology parser ======
     function readAttr(el, name, def) {
       const v = el && el.getAttribute(name);
       return v !== null && v !== undefined && v !== '' ? v : def;
     }
     function findLocal(el, local) {
-      // Hittar t.ex. viz:position, viz:size, viz:color oavsett namespace-prefix
+      // Hittar t.ex. viz:position, viz:size, viz:color oavsett prefix
       const list = el.getElementsByTagName('*');
       for (const e of list) if (e.localName === local) return e;
       return null;
     }
 
     (async () => {
-      const res = await fetch("network.gexf"); // <-- byt namn vid behov
-      if (!res.ok) throw new Error(`Kunde inte läsa GEXF: ${res.status}`);
+      // === 1) Läs GEXF (lägg "network.gexf" bredvid index.html) ===
+      const res = await fetch("network.gexf");
+      if (!res.ok) throw new Error(`Kunde inte läsa network.gexf: ${res.status}`);
       const xmlText = await res.text();
       const xml = new DOMParser().parseFromString(xmlText, "application/xml");
 
-      const Graph = window.graphology.Graph;
+      // === 2) Skapa Graphology-graf ===
+      const Graph = window.graphology && (window.graphology.Graph || window.graphology.default);
       if (!Graph) throw new Error("Graphology kunde inte laddas.");
-
       const graphEl = xml.querySelector("gexf > graph") || xml.querySelector("graph");
       const defaultEdgeType = (graphEl && graphEl.getAttribute("defaultedgetype")) || "undirected";
       const type = defaultEdgeType === "directed" ? "directed" :
                    defaultEdgeType === "undirected" ? "undirected" : "mixed";
 
-      const graph = new Graph({type});
+      const graph = new Graph({ type });
 
-      // Noder
+      // === 3) Noder ===
       const nodeEls = xml.getElementsByTagName("node");
       for (const n of nodeEls) {
         const id = n.getAttribute("id");
@@ -54,44 +66,107 @@
         const sizeEl = findLocal(n, "size");
         const colorEl = findLocal(n, "color");
 
-        const x = pos ? parseFloat(readAttr(pos, "x", "0")) : undefined;
-        const y = pos ? parseFloat(readAttr(pos, "y", "0")) : undefined;
-        const size = sizeEl ? parseFloat(readAttr(sizeEl, "value", readAttr(sizeEl, "size", "1"))) : undefined;
+        let x = pos ? parseFloat(readAttr(pos, "x", "NaN")) : NaN;
+        let y = pos ? parseFloat(readAttr(pos, "y", "NaN")) : NaN;
+        const size = sizeEl ? parseFloat(readAttr(sizeEl, "value", readAttr(sizeEl, "size", "1"))) : NaN;
+
+        // fallback-placering om X/Y saknas
+        if (Number.isNaN(x) || Number.isNaN(y)) {
+          const r = Math.random() * 1000;
+          const a = Math.random() * Math.PI * 2;
+          x = r * Math.cos(a);
+          y = r * Math.sin(a);
+        }
+
         const color = colorEl
           ? `rgb(${readAttr(colorEl,"r","0")},${readAttr(colorEl,"g","0")},${readAttr(colorEl,"b","0")})`
           : undefined;
 
-        const attrs = { label };
-        if (!Number.isNaN(x)) attrs.x = x;
-        if (!Number.isNaN(y)) attrs.y = y;
+        const attrs = { label, x, y };
         if (!Number.isNaN(size)) attrs.size = size;
         if (color) attrs.color = color;
 
         graph.addNode(id, attrs);
       }
 
-      // Kanter
+      // === 4) Kanter ===
       const edgeEls = xml.getElementsByTagName("edge");
+      let autoId = 0;
       for (const e of edgeEls) {
         const key = e.getAttribute("id");
         const source = e.getAttribute("source");
         const target = e.getAttribute("target");
         const weightAttr = e.getAttribute("weight");
-        const weight = weightAttr != null ? parseFloat(weightAttr) : undefined;
+        const weight = weightAttr != null ? parseFloat(weightAttr) : NaN;
 
         const attrs = {};
         if (!Number.isNaN(weight)) attrs.weight = weight;
 
-        // Säkert unikt edge-key om GEXF saknar id
-        const edgeKey = key || `${source}->${target}-${Math.random().toString(36).slice(2, 8)}`;
+        const edgeKey = key || `e_${autoId++}_${source}_${target}`;
+        // addEdgeWithKey kastar fel om nod-id saknas; vi antar GEXF är konsistent
         graph.addEdgeWithKey(edgeKey, source, target, attrs);
       }
 
+      // === 5) Rendera med Sigma ===
       const container = document.getElementById("container");
       const SigmaCtor = window.Sigma || (window.sigma && window.sigma.Sigma);
       if (!SigmaCtor) throw new Error("Sigma kunde inte laddas.");
       const renderer = new SigmaCtor(graph, container);
 
+      // ====== 6) Interaktiv filtrering / highlight vid klick ======
+      let activeNode = null;
+      let neighborSet = new Set();
+
+      // Dimma alla icke-grannar; visa label bara för aktiv + grannar
+      renderer.setSetting("nodeReducer", (nodeKey, data) => {
+        const res = { ...data };
+        if (activeNode) {
+          if (nodeKey === activeNode || neighborSet.has(nodeKey)) {
+            return res; // behåll som vanligt
+          }
+          // Dämpa (vill du gömma helt, byt till res.hidden = true;)
+          res.color = "#e0e0e0";
+          res.label = "";
+        }
+        return res;
+      });
+
+      // Visa endast kanter som ansluter till aktiv nod
+      renderer.setSetting("edgeReducer", (edgeKey, data) => {
+        const res = { ...data };
+        if (activeNode) {
+          const [s, t] = graph.extremities(edgeKey);
+          if (s !== activeNode && t !== activeNode) res.hidden = true;
+        }
+        return res;
+      });
+
+      // Klick på nod → aktivera
+      renderer.on("clickNode", ({ node }) => {
+        activeNode = node;
+        neighborSet = new Set(graph.neighbors(node));
+        renderer.refresh();
+        // (valfritt) zooma mjukt mot noden:
+        // renderer.getCamera().animate({ x: graph.getNodeAttribute(node, "x"), y: graph.getNodeAttribute(node, "y"), ratio: 0.5 }, { duration: 300 });
+      });
+
+      // Klick på bakgrunden → återställ
+      renderer.on("clickStage", () => {
+        activeNode = null;
+        neighborSet.clear();
+        renderer.refresh();
+      });
+
+      // ESC → återställ
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          activeNode = null;
+          neighborSet.clear();
+          renderer.refresh();
+        }
+      });
+
+      // Centrera initialt
       renderer.getCamera().animatedReset();
     })().catch(err => {
       console.error("Fel vid laddning/rendering:", err);
