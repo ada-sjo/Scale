@@ -6,12 +6,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body, #container { margin:0; padding:0; width:100%; height:100vh; }
-    /* (valfritt) liten overlay för instruktion */
     .hint {
       position: fixed; inset: 12px auto auto 12px; z-index: 10;
       background: rgba(255,255,255,0.9); padding: 8px 12px; border-radius: 8px;
       font: 13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+      max-width: 420px;
     }
     .hint kbd {
       background: #f2f2f2; border-radius: 4px; padding: 0 6px; border: 1px solid #ddd;
@@ -19,21 +19,24 @@
   </style>
 </head>
 <body>
-  <div class="hint">Klicka på en nod för att filtrera kopplingar. Klicka på bakgrunden eller tryck <kbd>Esc</kbd> för att återställa.</div>
+  <div class="hint">
+    <strong>Tips:</strong> Hovra över en nod för att highlighta dess grannar. Klick låser läget.
+    Klicka på bakgrunden eller tryck <kbd>Esc</kbd> för att återställa.
+  </div>
   <div id="container"></div>
 
-  <!-- Endast två beroenden via CDN (UMD): Graphology + Sigma -->
+  <!-- Endast två beroenden (UMD) via jsDelivr -->
   <script src="https://cdn.jsdelivr.net/npm/graphology@0.26.0/dist/graphology.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sigma@2.4.0/build/sigma.min.js"></script>
 
   <script>
-    // ====== Minimal GEXF → Graphology parser ======
+    // ====== Minimal GEXF → Graphology parser (utan externa parsers) ======
     function readAttr(el, name, def) {
       const v = el && el.getAttribute(name);
       return v !== null && v !== undefined && v !== '' ? v : def;
     }
     function findLocal(el, local) {
-      // Hittar t.ex. viz:position, viz:size, viz:color oavsett prefix
+      // Hittar t.ex. viz:position, viz:size, viz:color oavsett namespace-prefix
       const list = el.getElementsByTagName('*');
       for (const e of list) if (e.localName === local) return e;
       return null;
@@ -70,7 +73,7 @@
         let y = pos ? parseFloat(readAttr(pos, "y", "NaN")) : NaN;
         const size = sizeEl ? parseFloat(readAttr(sizeEl, "value", readAttr(sizeEl, "size", "1"))) : NaN;
 
-        // fallback-placering om X/Y saknas
+        // Fallback-placering om X/Y saknas
         if (Number.isNaN(x) || Number.isNaN(y)) {
           const r = Math.random() * 1000;
           const a = Math.random() * Math.PI * 2;
@@ -103,7 +106,6 @@
         if (!Number.isNaN(weight)) attrs.weight = weight;
 
         const edgeKey = key || `e_${autoId++}_${source}_${target}`;
-        // addEdgeWithKey kastar fel om nod-id saknas; vi antar GEXF är konsistent
         graph.addEdgeWithKey(edgeKey, source, target, attrs);
       }
 
@@ -113,57 +115,82 @@
       if (!SigmaCtor) throw new Error("Sigma kunde inte laddas.");
       const renderer = new SigmaCtor(graph, container);
 
-      // ====== 6) Interaktiv filtrering / highlight vid klick ======
-      let activeNode = null;
-      let neighborSet = new Set();
+      // ====== 6) Interaktiv filtrering: klick + hover ======
+      let activeNode = null;            // klickad nod (låsning)
+      let activeNeighbors = new Set();
 
-      // Dimma alla icke-grannar; visa label bara för aktiv + grannar
+      let hoveredNode = null;           // nod under muspekaren (tillfälligt)
+      let hoveredNeighbors = new Set();
+
+      function getFocus() {
+        if (activeNode) return { node: activeNode, neighbors: activeNeighbors };
+        if (hoveredNode) return { node: hoveredNode, neighbors: hoveredNeighbors };
+        return { node: null, neighbors: null };
+        }
+
+      // Noder: dimma allt utom fokus + grannar (byt till res.hidden=true; om du vill dölja helt)
       renderer.setSetting("nodeReducer", (nodeKey, data) => {
         const res = { ...data };
-        if (activeNode) {
-          if (nodeKey === activeNode || neighborSet.has(nodeKey)) {
-            return res; // behåll som vanligt
+        const { node: focusNode, neighbors } = getFocus();
+
+        if (focusNode) {
+          if (nodeKey === focusNode || (neighbors && neighbors.has(nodeKey))) {
+            // (valfritt) förstärk fokus-noden:
+            // if (nodeKey === focusNode) res.size = (res.size || 1) * 1.2;
+            return res;
           }
-          // Dämpa (vill du gömma helt, byt till res.hidden = true;)
           res.color = "#e0e0e0";
           res.label = "";
         }
         return res;
       });
 
-      // Visa endast kanter som ansluter till aktiv nod
+      // Kanter: visa bara kanter som ansluter till fokus
       renderer.setSetting("edgeReducer", (edgeKey, data) => {
         const res = { ...data };
-        if (activeNode) {
+        const { node: focusNode } = getFocus();
+
+        if (focusNode) {
           const [s, t] = graph.extremities(edgeKey);
-          if (s !== activeNode && t !== activeNode) res.hidden = true;
+          if (s !== focusNode && t !== focusNode) res.hidden = true;
         }
         return res;
       });
 
-      // Klick på nod → aktivera
+      // Klick → lås fokus
       renderer.on("clickNode", ({ node }) => {
         activeNode = node;
-        neighborSet = new Set(graph.neighbors(node));
+        activeNeighbors = new Set(graph.neighbors(node));
         renderer.refresh();
-        // (valfritt) zooma mjukt mot noden:
-        // renderer.getCamera().animate({ x: graph.getNodeAttribute(node, "x"), y: graph.getNodeAttribute(node, "y"), ratio: 0.5 }, { duration: 300 });
       });
 
-      // Klick på bakgrunden → återställ
+      // Klick på bakgrund → släpp låsning
       renderer.on("clickStage", () => {
         activeNode = null;
-        neighborSet.clear();
+        activeNeighbors.clear();
         renderer.refresh();
       });
 
-      // ESC → återställ
+      // Esc → släpp låsning
       window.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
           activeNode = null;
-          neighborSet.clear();
+          activeNeighbors.clear();
           renderer.refresh();
         }
+      });
+
+      // Hover → tillfällig fokus när ingen klick-låsning finns
+      renderer.on("enterNode", ({ node }) => {
+        hoveredNode = node;
+        hoveredNeighbors = new Set(graph.neighbors(node));
+        renderer.refresh();
+      });
+
+      renderer.on("leaveNode", () => {
+        hoveredNode = null;
+        hoveredNeighbors.clear();
+        renderer.refresh();
       });
 
       // Centrera initialt
