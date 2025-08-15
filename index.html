@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
   <meta charset="utf-8" />
-  <title>Nätverksgraf</title>
+  <title>Nätverksgraf (ESM)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     html, body, #container { margin:0; padding:0; width:100%; height:100vh; }
@@ -11,37 +11,20 @@
 <body>
   <div id="container"></div>
 
-  <!-- UMD builds (globala namespaces) via jsDelivr -->
-  <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.1/dist/graphology.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/graphology-gexf@0.13.2/browser/graphology-gexf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sigma@2.3.0/build/sigma.min.js"></script>
+  <script type="module">
+    import Graph from "https://cdn.jsdelivr.net/npm/graphology@0.25.1/dist/graphology.esm.min.js";
+    import { parse as parseGEXF } from "https://cdn.jsdelivr.net/npm/graphology-gexf@0.13.2/esm/index.js";
+    import Sigma from "https://cdn.jsdelivr.net/npm/sigma@2.3.0/build/sigma.esm.js";
 
-  <script>
-    (async () => {
-      const res = await fetch("network.gexf");
-      if (!res.ok) throw new Error(`Kunde inte läsa network.gexf: ${res.status}`);
-      const gexfText = await res.text();
+    const resp = await fetch("network.gexf");
+    if (!resp.ok) throw new Error(`Kunde inte läsa network.gexf: ${resp.status}`);
+    const text = await resp.text();
 
-      // Fallbacks för olika UMD-namn:
-      const GraphCtor =
-        (window.graphology && (window.graphology.Graph || window.graphology.default)) || null;
+    const graph = parseGEXF(Graph, text);
 
-      const gexfGlobal =
-        window.graphologyGexf || window.graphologyGEXF || window.gexf || null;
-
-      if (!GraphCtor) throw new Error("Hittade ingen Graph-konstruktor på window.graphology.*");
-      if (!gexfGlobal || typeof gexfGlobal.parse !== "function")
-        throw new Error("Hittade ingen gexf-parser (graphology-gexf) på window.*");
-
-      const graph = gexfGlobal.parse(GraphCtor, gexfText);
-
-      const container = document.getElementById("container");
-      const renderer = new sigma.Sigma(graph, container);
-      renderer.getCamera().animatedReset();
-    })().catch(err => {
-      console.error("Fel vid laddning/rendering:", err);
-      alert("Kunde inte visa grafen. Se konsolen för detaljer.");
-    });
+    const container = document.getElementById("container");
+    const renderer = new Sigma(graph, container);
+    renderer.getCamera().animatedReset();
   </script>
 </body>
 </html>
