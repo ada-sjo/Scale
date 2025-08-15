@@ -11,33 +11,91 @@
 <body>
   <div id="container"></div>
 
-  <!-- UMD builds via jsDelivr -->
-  <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/graphology-gexf@0.13.2/browser/index.js"></script>
+  <!-- Endast två beroenden via CDN: Graphology + Sigma (UMD-byggnader) -->
+  <script src="https://cdn.jsdelivr.net/npm/graphology@0.26.0/dist/graphology.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sigma@2.4.0/build/sigma.min.js"></script>
 
   <script>
+    // Minimal GEXF->Graphology parser (utan externa parsers)
+    function readAttr(el, name, def) {
+      const v = el && el.getAttribute(name);
+      return v !== null && v !== undefined && v !== '' ? v : def;
+    }
+    function findLocal(el, local) {
+      // Hittar t.ex. viz:position, viz:size, viz:color oavsett namespace-prefix
+      const list = el.getElementsByTagName('*');
+      for (const e of list) if (e.localName === local) return e;
+      return null;
+    }
+
     (async () => {
-      const res = await fetch("network.gexf");
-      if (!res.ok) throw new Error(`Kunde inte läsa network.gexf: ${res.status}`);
-      const gexfText = await res.text();
+      const res = await fetch("network.gexf"); // <-- byt namn vid behov
+      if (!res.ok) throw new Error(`Kunde inte läsa GEXF: ${res.status}`);
+      const xmlText = await res.text();
+      const xml = new DOMParser().parseFromString(xmlText, "application/xml");
 
-      // Hämta constructors + parser från globala UMD-namn
-      const GraphCtor = (window.graphology && (window.graphology.Graph || window.graphology.default)) || null;
-      const gexf = window.gexf || window.graphologyGexf || window.graphologyGEXF || null;
-      const SigmaCtor = window.Sigma || (window.sigma && window.sigma.Sigma) || null;
+      const Graph = window.graphology.Graph;
+      if (!Graph) throw new Error("Graphology kunde inte laddas.");
 
-      if (!GraphCtor) throw new Error("Hittade ingen Graph-konstruktor (graphology).");
-      if (!gexf || typeof gexf.parse !== "function") throw new Error("Hittade ingen GEXF-parser (graphology-gexf).");
-      if (!SigmaCtor) throw new Error("Hittade ingen Sigma-konstruktor.");
+      const graphEl = xml.querySelector("gexf > graph") || xml.querySelector("graph");
+      const defaultEdgeType = (graphEl && graphEl.getAttribute("defaultedgetype")) || "undirected";
+      const type = defaultEdgeType === "directed" ? "directed" :
+                   defaultEdgeType === "undirected" ? "undirected" : "mixed";
 
-      const graph = gexf.parse(GraphCtor, gexfText); // ← signaturen enligt docs
+      const graph = new Graph({type});
+
+      // Noder
+      const nodeEls = xml.getElementsByTagName("node");
+      for (const n of nodeEls) {
+        const id = n.getAttribute("id");
+        const label = n.getAttribute("label") || id;
+
+        const pos = findLocal(n, "position");
+        const sizeEl = findLocal(n, "size");
+        const colorEl = findLocal(n, "color");
+
+        const x = pos ? parseFloat(readAttr(pos, "x", "0")) : undefined;
+        const y = pos ? parseFloat(readAttr(pos, "y", "0")) : undefined;
+        const size = sizeEl ? parseFloat(readAttr(sizeEl, "value", readAttr(sizeEl, "size", "1"))) : undefined;
+        const color = colorEl
+          ? `rgb(${readAttr(colorEl,"r","0")},${readAttr(colorEl,"g","0")},${readAttr(colorEl,"b","0")})`
+          : undefined;
+
+        const attrs = { label };
+        if (!Number.isNaN(x)) attrs.x = x;
+        if (!Number.isNaN(y)) attrs.y = y;
+        if (!Number.isNaN(size)) attrs.size = size;
+        if (color) attrs.color = color;
+
+        graph.addNode(id, attrs);
+      }
+
+      // Kanter
+      const edgeEls = xml.getElementsByTagName("edge");
+      for (const e of edgeEls) {
+        const key = e.getAttribute("id");
+        const source = e.getAttribute("source");
+        const target = e.getAttribute("target");
+        const weightAttr = e.getAttribute("weight");
+        const weight = weightAttr != null ? parseFloat(weightAttr) : undefined;
+
+        const attrs = {};
+        if (!Number.isNaN(weight)) attrs.weight = weight;
+
+        // Säkert unikt edge-key om GEXF saknar id
+        const edgeKey = key || `${source}->${target}-${Math.random().toString(36).slice(2, 8)}`;
+        graph.addEdgeWithKey(edgeKey, source, target, attrs);
+      }
+
       const container = document.getElementById("container");
+      const SigmaCtor = window.Sigma || (window.sigma && window.sigma.Sigma);
+      if (!SigmaCtor) throw new Error("Sigma kunde inte laddas.");
       const renderer = new SigmaCtor(graph, container);
+
       renderer.getCamera().animatedReset();
     })().catch(err => {
       console.error("Fel vid laddning/rendering:", err);
-      alert("Kunde inte visa grafen. Se konsolen (F12) för detaljer.");
+      alert("Kunde inte visa grafen. Öppna konsolen (F12) för detaljer.");
     });
   </script>
 </body>
